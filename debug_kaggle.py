@@ -71,22 +71,32 @@ def debug_kaggle():
     try:
         console.print("🔍 Testing dataset search...")
         
-        # First try a simple dataset_list call
+        # First try a simple dataset_list call (no parameters)
         try:
-            datasets = api.dataset_list()
+            datasets = api.dataset_list()  # Try without any parameters first
             console.print(f"✅ Simple dataset_list(): found {len(datasets)} datasets")
             if datasets:
                 console.print(f"   First result: {getattr(datasets[0], 'title', 'No title')}")
         except Exception as e:
             console.print(f"❌ Simple dataset_list() failed: {e}")
+            
+        # Try with sort parameter
+        try:
+            datasets = api.dataset_list(sort_by='hottest')  # Fixed sort parameter
+            console.print(f"✅ dataset_list(sort_by='hottest'): found {len(datasets)} datasets")
+            if datasets:
+                console.print(f"   First result: {getattr(datasets[0], 'title', 'No title')}")
+        except Exception as e:
+            console.print(f"❌ dataset_list with sort failed: {e}")
         
         # Try different search terms
         search_terms = ["education", "climate", "population"]
         
         for term in search_terms:
             try:
+                # Try search without sort first
                 datasets = api.dataset_list(search=term)
-                console.print(f"✅ Search '{term}': found {len(datasets)} datasets")
+                console.print(f"✅ Search '{term}' (no sort): found {len(datasets)} datasets")
                 
                 if datasets:
                     first_title = getattr(datasets[0], 'title', 'No title')
@@ -95,6 +105,15 @@ def debug_kaggle():
                     # Debug first dataset attributes
                     console.print(f"   Dataset attributes: {[attr for attr in dir(datasets[0]) if not attr.startswith('_')]}")
                     break
+                else:
+                    # Try with sort if no results
+                    datasets = api.dataset_list(search=term, sort_by='hottest')
+                    console.print(f"✅ Search '{term}' (with sort): found {len(datasets)} datasets")
+                    if datasets:
+                        first_title = getattr(datasets[0], 'title', 'No title')
+                        console.print(f"   First result: {first_title}")
+                        break
+                        
             except Exception as e:
                 console.print(f"❌ Search '{term}' failed: {e}")
     
