@@ -24,15 +24,20 @@ console = Console()
 @click.command()
 @click.option('--max-results', '-m', default=10, help='Maximum number of datasets to find')
 @click.option('--verbose', '-v', is_flag=True, help='Enable verbose output')
-def main(max_results: int, verbose: bool):
+@click.option('--clear-cache', '-c', is_flag=True, help='Clear cached results before searching')
+def main(max_results: int, verbose: bool, clear_cache: bool):
     """
     PersonalDataAI - Ask natural language questions about public datasets
     
     Interactive mode: The system will ask you for your question
     
+    Options:
+    --clear-cache: Clear cached results to get fresh data from APIs
+    --verbose: Show detailed output
+    --max-results: Maximum results to show initially
+    
     Example:
-    python main.py
-    > What would you like to know? How does education spending correlate with literacy rates?
+    python main.py --clear-cache --verbose
     """
     
     # Load configuration
@@ -47,7 +52,8 @@ def main(max_results: int, verbose: bool):
         "[bold blue]PersonalDataAI[/bold blue]\n"
         "[dim]Multi-Agent Data Discovery & Analysis[/dim]\n\n"
         f"[green]Model:[/green] {settings.ollama_model}\n"
-        f"[green]Max Results:[/green] {max_results}\n\n"
+        f"[green]Max Results:[/green] {max_results}\n"
+        f"[green]Clear Cache:[/green] {'Yes' if clear_cache else 'No'}\n\n"
         "[dim]💡 Example questions:[/dim]\n"
         "[dim]• How does education spending correlate with literacy rates?[/dim]\n"
         "[dim]• Climate change temperature data by country[/dim]\n"
@@ -55,6 +61,16 @@ def main(max_results: int, verbose: bool):
         title="🤖 Agent System Ready",
         border_style="blue"
     ))
+    
+    # Initialize agent once
+    agent = DataCollectorAgent(settings, verbose=verbose)
+    
+    # Clear cache if requested
+    if clear_cache:
+        console.print("\n[yellow]🧹 Clearing cached results...[/yellow]")
+        agent.kaggle.clear_cache()
+        agent.data_gov.clear_cache()
+        console.print("[green]✅ Cache cleared![/green]")
     
     while True:
         try:
@@ -72,8 +88,6 @@ def main(max_results: int, verbose: bool):
                 
             console.print(f"\n[green]🔍 Searching for:[/green] [bold]{query}[/bold]")
             
-            # Initialize Agent 1: Data Discovery
-            agent = DataCollectorAgent(settings, verbose=verbose)
             console.print("\n[yellow]🔍 Agent 1: Data Discovery Specialist - Starting...[/yellow]")
             
             # Execute data discovery

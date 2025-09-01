@@ -100,66 +100,63 @@ class KaggleConnector(BaseConnector):
             
             try:
                 if self.verbose:
-                    self.console.print(f"[dim]📡 Kaggle API search: '{search_query}' with {len(all_keywords)} keywords[/dim]")
+                    if search_query:
+                        self.console.print(f"[dim]📡 Kaggle API search: '{search_query}'[/dim]")
+                    else:
+                        self.console.print(f"[dim]📡 Kaggle API: getting popular datasets (no search term)[/dim]")
                 
-                # Try search with sort parameter first
-                try:
-                    datasets = self.kaggle_api.dataset_list(search=search_query, sort_by='hottest')
-                    if self.verbose:
-                        self.console.print(f"[green]✅ Kaggle API (with sort) returned {len(datasets)} datasets[/green]")
-                except Exception as sort_error:
-                    if self.verbose:
-                        self.console.print(f"[yellow]⚠️ Sort failed, trying without: {sort_error}[/yellow]")
-                    # Try without sort parameter
-                    datasets = self.kaggle_api.dataset_list(search=search_query)
-                    if self.verbose:
-                        self.console.print(f"[green]✅ Kaggle API (no sort) returned {len(datasets)} datasets[/green]")
-                    
-                # If we got no results, try simpler searches
-                if len(datasets) == 0 and all_keywords:
-                    if self.verbose:
-                        self.console.print("[yellow]⚠️ No datasets returned from Kaggle - trying broader search[/yellow]")
-                        
-                    # Try with just the first keyword
-                    broader_search = all_keywords[0]
-                    if self.verbose:
-                        self.console.print(f"[dim]🔄 Retrying with broader search: '{broader_search}'[/dim]")
-                    
+                # Make the API call
+                if search_query:
+                    # Try search with sort parameter first
                     try:
-                        datasets = self.kaggle_api.dataset_list(search=broader_search, sort_by='hottest')
+                        datasets = self.kaggle_api.dataset_list(search=search_query, sort_by='hottest')
+                        if self.verbose:
+                            self.console.print(f"[green]✅ Kaggle search (with sort) returned {len(datasets)} datasets[/green]")
+                    except Exception as sort_error:
+                        if self.verbose:
+                            self.console.print(f"[yellow]⚠️ Sort failed, trying without: {sort_error}[/yellow]")
+                        # Try without sort parameter
+                        datasets = self.kaggle_api.dataset_list(search=search_query)
+                        if self.verbose:
+                            self.console.print(f"[green]✅ Kaggle search (no sort) returned {len(datasets)} datasets[/green]")
+                else:
+                    # No search term - get popular datasets
+                    try:
+                        datasets = self.kaggle_api.dataset_list(sort_by='hottest')[:100]  # Get top 100 popular
+                        if self.verbose:
+                            self.console.print(f"[green]✅ Kaggle popular datasets returned {len(datasets)} datasets[/green]")
+                    except Exception as sort_error:
+                        if self.verbose:
+                            self.console.print(f"[yellow]⚠️ Sort failed, trying without: {sort_error}[/yellow]")
+                        datasets = self.kaggle_api.dataset_list()[:100]
+                        if self.verbose:
+                            self.console.print(f"[green]✅ Kaggle datasets (no sort) returned {len(datasets)} datasets[/green]")
+                    
+                # If we got no results and we had a search term, try without search term
+                if len(datasets) == 0 and search_query:
+                    if self.verbose:
+                        self.console.print("[yellow]⚠️ No search results - trying popular datasets fallback[/yellow]")
+                        
+                    try:
+                        datasets = self.kaggle_api.dataset_list(sort_by='hottest')[:50]  # Get top 50 popular
                     except:
-                        datasets = self.kaggle_api.dataset_list(search=broader_search)
+                        datasets = self.kaggle_api.dataset_list()[:50]  # Fallback without sort
                     
                     if self.verbose:
-                        self.console.print(f"[green]✅ Broader search returned {len(datasets)} datasets[/green]")
-                        
-                    # If still no results, try without search term (get popular datasets)
-                    if len(datasets) == 0:
-                        if self.verbose:
-                            self.console.print("[yellow]⚠️ Still no results - getting popular datasets[/yellow]")
-                        try:
-                            datasets = self.kaggle_api.dataset_list(sort_by='hottest')[:50]  # Get top 50 popular
-                        except:
-                            datasets = self.kaggle_api.dataset_list()[:50]  # Fallback without sort
-                        
-                        if self.verbose:
-                            self.console.print(f"[green]✅ Popular datasets fallback returned {len(datasets)} datasets[/green]")
+                        self.console.print(f"[green]✅ Popular datasets fallback returned {len(datasets)} datasets[/green]")
                             
             except Exception as e:
                 if self.verbose:
                     self.console.print(f"[red]❌ Kaggle API error: {e}[/red]")
                 
-                # Try a simple fallback - get some popular datasets
+                # Ultimate fallback - get some datasets without any parameters
                 try:
                     if self.verbose:
-                        self.console.print("[dim]🔄 Trying simple dataset list as fallback[/dim]")
-                    try:
-                        datasets = self.kaggle_api.dataset_list(sort_by='hottest')[:20]
-                    except:
-                        datasets = self.kaggle_api.dataset_list()[:20]  # Ultimate fallback
+                        self.console.print("[dim]🔄 Trying ultimate fallback - simple dataset list[/dim]")
+                    datasets = self.kaggle_api.dataset_list()[:20]  # Just get some datasets
                         
                     if self.verbose:
-                        self.console.print(f"[green]✅ Fallback returned {len(datasets)} datasets[/green]")
+                        self.console.print(f"[green]✅ Ultimate fallback returned {len(datasets)} datasets[/green]")
                 except Exception as fallback_error:
                     if self.verbose:
                         self.console.print(f"[red]❌ All Kaggle attempts failed: {fallback_error}[/red]")
