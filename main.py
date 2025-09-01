@@ -22,17 +22,17 @@ from config.settings import load_settings
 console = Console()
 
 @click.command()
-@click.argument('query', type=str)
 @click.option('--max-results', '-m', default=10, help='Maximum number of datasets to find')
 @click.option('--verbose', '-v', is_flag=True, help='Enable verbose output')
-def main(query: str, max_results: int, verbose: bool):
+def main(max_results: int, verbose: bool):
     """
     PersonalDataAI - Ask natural language questions about public datasets
     
-    QUERY: Your natural language question about data you want to analyze
+    Interactive mode: The system will ask you for your question
     
     Example:
-    python main.py "How does education spending correlate with literacy rates across countries?"
+    python main.py
+    > What would you like to know? How does education spending correlate with literacy rates?
     """
     
     # Load configuration
@@ -46,56 +46,78 @@ def main(query: str, max_results: int, verbose: bool):
     console.print(Panel.fit(
         "[bold blue]PersonalDataAI[/bold blue]\n"
         "[dim]Multi-Agent Data Discovery & Analysis[/dim]\n\n"
-        f"[green]Query:[/green] {query}\n"
         f"[green]Model:[/green] {settings.ollama_model}\n"
-        f"[green]Max Results:[/green] {max_results}",
-        title="🤖 Agent System Starting",
+        f"[green]Max Results:[/green] {max_results}\n\n"
+        "[dim]💡 Example questions:[/dim]\n"
+        "[dim]• How does education spending correlate with literacy rates?[/dim]\n"
+        "[dim]• Climate change temperature data by country[/dim]\n"
+        "[dim]• Population demographics United States[/dim]",
+        title="🤖 Agent System Ready",
         border_style="blue"
     ))
     
-    # Initialize Agent 1: Data Discovery
-    try:
-        agent = DataCollectorAgent(settings, verbose=verbose)
-        console.print("\n[yellow]🔍 Agent 1: Data Discovery Specialist - Starting...[/yellow]")
-        
-        # Execute data discovery
-        datasets = agent.discover_datasets(query, max_results=max_results)
-        
-        if not datasets:
-            console.print("[red]No datasets found for your query. Try rephrasing or using different keywords.[/red]")
-            sys.exit(1)
+    while True:
+        try:
+            # Interactive prompt for user query
+            console.print("\n" + "="*60)
+            query = console.input(
+                "[bold cyan]❓ What would you like to know about data?[/bold cyan]\n"
+                "[dim](Press Ctrl+C to exit)[/dim]\n"
+                "[yellow]>>[/yellow] "
+            ).strip()
             
-        # Display results
-        console.print(f"\n[green]✅ Found {len(datasets)} relevant datasets![/green]")
-        
-        # Show dataset options
-        console.print("\n[bold cyan]📊 Available Datasets:[/bold cyan]")
-        for i, dataset in enumerate(datasets, 1):
-            console.print(f"[dim]{i}.[/dim] [bold]{dataset['title']}[/bold]")
-            console.print(f"   [green]Source:[/green] {dataset['source']}")
-            console.print(f"   [green]Score:[/green] {dataset['relevance_score']:.2f}/10")
-            if dataset.get('description'):
-                desc = dataset['description'][:100] + "..." if len(dataset['description']) > 100 else dataset['description']
-                console.print(f"   [dim]{desc}[/dim]")
-            console.print()
-        
-        # For now, just show the results (later we'll add dataset selection)
-        console.print(Panel.fit(
-            "[bold green]🎉 Agent 1 Complete![/bold green]\n\n"
-            "[dim]Next Steps:[/dim]\n"
-            "• Agent 2: Data Processing (Coming Soon)\n"
-            "• Agent 3: Pattern Analysis (Coming Soon)\n"
-            "• Agent 4: Report Generation (Coming Soon)",
-            title="Status Update",
-            border_style="green"
-        ))
-        
-    except Exception as e:
-        console.print(f"[red]❌ Error in Agent 1: {e}[/red]")
-        if verbose:
-            import traceback
-            console.print(f"[red]{traceback.format_exc()}[/red]")
-        sys.exit(1)
+            if not query:
+                console.print("[yellow]Please enter a question![/yellow]")
+                continue
+                
+            console.print(f"\n[green]🔍 Searching for:[/green] [bold]{query}[/bold]")
+            
+            # Initialize Agent 1: Data Discovery
+            agent = DataCollectorAgent(settings, verbose=verbose)
+            console.print("\n[yellow]🔍 Agent 1: Data Discovery Specialist - Starting...[/yellow]")
+            
+            # Execute data discovery
+            datasets = agent.discover_datasets(query, max_results=max_results)
+            
+            if not datasets:
+                console.print("[red]No datasets found for your query. Try rephrasing or using different keywords.[/red]")
+                continue
+                
+            # Display results
+            console.print(f"\n[green]✅ Found {len(datasets)} relevant datasets![/green]")
+            
+            # Show dataset options
+            console.print("\n[bold cyan]📊 Available Datasets:[/bold cyan]")
+            for i, dataset in enumerate(datasets, 1):
+                console.print(f"[dim]{i}.[/dim] [bold]{dataset['title']}[/bold]")
+                console.print(f"   [green]Source:[/green] {dataset['source']}")
+                console.print(f"   [green]Score:[/green] {dataset['relevance_score']:.2f}/10")
+                if dataset.get('description'):
+                    desc = dataset['description'][:100] + "..." if len(dataset['description']) > 100 else dataset['description']
+                    console.print(f"   [dim]{desc}[/dim]")
+                console.print()
+            
+            # Ask if user wants to continue
+            console.print(Panel.fit(
+                "[bold green]🎉 Agent 1 Complete![/bold green]\n\n"
+                "[dim]Next Steps:[/dim]\n"
+                "• Agent 2: Data Processing (Coming Soon)\n"
+                "• Agent 3: Pattern Analysis (Coming Soon)\n"
+                "• Agent 4: Report Generation (Coming Soon)",
+                title="Status Update",
+                border_style="green"
+            ))
+            
+        except KeyboardInterrupt:
+            console.print("\n\n[yellow]👋 Thanks for using PersonalDataAI![/yellow]")
+            break
+            
+        except Exception as e:
+            console.print(f"[red]❌ Error in Agent 1: {e}[/red]")
+            if verbose:
+                import traceback
+                console.print(f"[red]{traceback.format_exc()}[/red]")
+            console.print("[dim]Try again with a different query...[/dim]")
 
 if __name__ == "__main__":
     main()
