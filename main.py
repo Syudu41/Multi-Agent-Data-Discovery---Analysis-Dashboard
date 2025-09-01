@@ -85,6 +85,14 @@ def main(max_results: int, verbose: bool):
                 
             # Display results in table format
             console.print(f"\n[green]✅ Found {len(agent.get_all_results())} total datasets! Showing top {len(df_results)}[/green]")
+            
+            # Show source breakdown
+            all_results = agent.get_all_results()
+            source_counts = all_results['source'].value_counts()
+            console.print(f"\n[bold]📊 Source Breakdown:[/bold]")
+            for source, count in source_counts.items():
+                console.print(f"   • {source}: {count} datasets")
+            
             console.print("\n[bold cyan]📊 Available Datasets:[/bold cyan]")
             
             agent.display_results_table(df_results)
@@ -103,9 +111,9 @@ def main(max_results: int, verbose: bool):
                     break  # New search
                 elif user_input == 'more':
                     try:
-                        more_results = agent.get_more_results(start_rank=max_results+1, count=10)
+                        more_results = agent.get_more_results(count=10)
                         if not more_results.empty:
-                            console.print(f"\n[green]Next {len(more_results)} results:[/green]")
+                            console.print(f"\n[green]Next {len(more_results)} results (showing {agent.current_display_position-len(more_results)+1}-{agent.current_display_position}):[/green]")
                             agent.display_results_table(more_results)
                         else:
                             console.print("[yellow]No more results available[/yellow]")
