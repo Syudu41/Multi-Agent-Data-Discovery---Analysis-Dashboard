@@ -20,6 +20,7 @@ from pathlib import Path
 
 from tools.data_sources.data_gov_connector import DataGovConnector
 from tools.data_sources.kaggle_connector import KaggleConnector
+from tools.data_sources.world_bank_connector import WorldBankConnector
 from tools.llm_client import OllamaClient
 
 @dataclass
@@ -64,9 +65,16 @@ class DataCollectorAgent:
             verbose=verbose
         )
         
+        # Initialize World Bank connector
+        self.worldbank = WorldBankConnector(
+            cache_dir=settings.cache_dir,
+            verbose=verbose
+        )
+        
         # Storage for results
         self.last_results_df = None
         self.last_query = None
+        self.current_display_position = 0  # Track where user is in results
     
     def discover_datasets(self, query: str, max_results: int = 10) -> pd.DataFrame:
         """
@@ -102,35 +110,80 @@ class DataCollectorAgent:
             data_gov_results = self.data_gov.search(search_params)
             progress.update(task, completed=True)
             
+            if self.verbose:
+                self.console.print(f"[dim]📊 data.gov returned {len(data_gov_results)} results[/dim]")
+            
             task = progress.add_task("📊 Searching Kaggle...", total=None)
             kaggle_results = self.kaggle.search(search_params)
             progress.update(task, completed=True)
             
+            if self.verbose:
+                self.console.print(f"[dim]🏆 Kaggle returned {len(kaggle_results)} results[/dim]")
+            
+            task = progress.add_task("🌍 Searching World Bank...", total=None)
+            worldbank_results = self.worldbank.search(search_params)
+            progress.update(task, completed=True)
+            
+            if self.verbose:
+                self.console.print(f"[dim]🌍 World Bank returned {len(worldbank_results)} results[/dim]")
+            
             # Step 3: Combine and rank results
             task = progress.add_task("⚖️ Ranking datasets by relevance...", total=None)
-            all_datasets = self._combine_results(data_gov_results, kaggle_results)
+            all_datasets = self._combine_results(data_gov_results, kaggle_results, worldbank_results)
+            
+            if self.verbose:
+                source_breakdown = {}
+                for dataset in all_datasets:
+                    source = dataset.source
+                    source_breakdown[source] = source_breakdown.get(source, 0) + 1
+                self.console.print(f"[dim]📈 Combined results by source: {source_breakdown}[/dim]")
+            
             ranked_datasets = self._rank_datasets(all_datasets, query, search_params)
             progress.update(task, completed=True)
         
-        # Return top results
+        # Return results with proper error handling
+        if len(ranked_datasets) == 0:
+            # No results found
+            if self.verbose:
+                self.console.print("[yellow]⚠️ No datasets found for this query[/yellow]")
+            
+            # Return empty DataFrame with proper structure
+            empty_df = pd.DataFrame(columns=[
+                'rank', 'title', 'description', 'source', 'url', 
+                'relevance_score', 'quality_score', 'recency_score', 
+                'overall_score', 'full_metadata'
+            ])
+            
+            self.last_results_df = empty_df
+            self.last_query = query
+            self.current_display_position = 0
+            
+            return empty_df
+        
         if self.verbose:
             self.console.print(f"[dim]✅ Found {len(ranked_datasets)} total datasets[/dim]")
         
         # Convert to DataFrame
         df_data = []
         for i, dataset in enumerate(ranked_datasets):
-            df_data.append({
-                'rank': i + 1,
-                'title': dataset.title,
-                'description': dataset.description[:200] + "..." if len(dataset.description) > 200 else dataset.description,
-                'source': dataset.source,
-                'url': dataset.url,
-                'relevance_score': round(dataset.relevance_score, 2),
-                'quality_score': round(dataset.quality_score, 2),
-                'recency_score': round(dataset.recency_score, 2),
-                'overall_score': round(dataset.overall_score, 2),
-                'full_metadata': dataset.metadata
-            })
+            try:
+                df_data.append({
+                    'rank': i + 1,
+                    'title': dataset.title or 'Untitled Dataset',
+                    'description': (dataset.description[:200] + "..." if len(dataset.description or '') > 200 
+                                  else dataset.description or 'No description available'),
+                    'source': dataset.source,
+                    'url': dataset.url or 'N/A',
+                    'relevance_score': round(dataset.relevance_score, 2),
+                    'quality_score': round(dataset.quality_score, 2),
+                    'recency_score': round(dataset.recency_score, 2),
+                    'overall_score': round(dataset.overall_score, 2),
+                    'full_metadata': dataset.metadata or {}
+                })
+            except Exception as e:
+                if self.verbose:
+                    self.console.print(f"[yellow]⚠️ Error processing dataset {i+1}: {e}[/yellow]")
+                continue
         
         df = pd.DataFrame(df_data)
         
@@ -140,6 +193,7 @@ class DataCollectorAgent:
         # Store in instance for later access
         self.last_results_df = df
         self.last_query = query
+        self.current_display_position = max_results  # Track what we've shown
         
         return df.head(max_results)  # Return top N for display
     
@@ -187,9 +241,14 @@ class DataCollectorAgent:
         # Simple keyword extraction
         import re
         words = re.findall(r'\b\w+\b', query.lower())
-        # Remove common stop words
+        
+        # Remove common stop words but keep important ones
         stop_words = {'how', 'does', 'what', 'where', 'when', 'why', 'is', 'are', 'the', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'a', 'an'}
         keywords = [word for word in words if word not in stop_words and len(word) > 2]
+        
+        # If no keywords found, use the original query
+        if not keywords:
+            keywords = [query.lower()]
         
         return {
             "keywords": keywords,
@@ -200,7 +259,8 @@ class DataCollectorAgent:
             "priority_keywords": keywords[:3]  # Top 3 words
         }
     
-    def _combine_results(self, data_gov_results: List[Dict], kaggle_results: List[Dict]) -> List[Dataset]:
+    def _combine_results(self, data_gov_results: List[Dict], kaggle_results: List[Dict], 
+                        worldbank_results: List[Dict]) -> List[Dataset]:
         """Combine results from different sources into Dataset objects"""
         
         datasets = []
@@ -233,6 +293,20 @@ class DataCollectorAgent:
                 metadata=result
             ))
         
+        # Convert World Bank results
+        for result in worldbank_results:
+            datasets.append(Dataset(
+                title=result.get('title', 'Unknown Indicator'),
+                description=result.get('description', result.get('notes', '')),
+                source='worldbank',
+                url=result.get('url', ''),
+                relevance_score=0.0,  # Will be calculated later
+                quality_score=self._calculate_quality_score(result, 'worldbank'),
+                recency_score=self._calculate_recency_score(result),
+                overall_score=0.0,  # Will be calculated later
+                metadata=result
+            ))
+        
         return datasets
     
     def _rank_datasets(self, datasets: List[Dataset], original_query: str, search_params: Dict) -> List[Dataset]:
@@ -255,7 +329,7 @@ class DataCollectorAgent:
         return sorted(datasets, key=lambda d: d.overall_score, reverse=True)
     
     def _calculate_relevance_score(self, dataset: Dataset, query: str, search_params: Dict) -> float:
-        """Calculate relevance score based on text matching"""
+        """Calculate relevance score based on text matching with fuzzy logic"""
         
         # Combine title and description for scoring
         text = f"{dataset.title} {dataset.description}".lower()
@@ -263,24 +337,73 @@ class DataCollectorAgent:
         
         score = 0.0
         
-        # Direct query match
+        # 1. Exact query match (highest score)
         if query_lower in text:
-            score += 3.0
+            score += 4.0
         
-        # Individual keyword matches
+        # 2. Fuzzy matching for partial queries
+        query_words = query_lower.split()
+        text_words = text.split()
+        
+        for query_word in query_words:
+            if len(query_word) > 2:  # Skip very short words
+                # Exact word match
+                if query_word in text_words:
+                    score += 2.0
+                    continue
+                
+                # Partial/fuzzy match
+                for text_word in text_words:
+                    if len(text_word) > 2:
+                        # Check if query word is substring of text word
+                        if query_word in text_word:
+                            score += 1.0
+                            break
+                        # Check if text word is substring of query word  
+                        elif text_word in query_word:
+                            score += 0.8
+                            break
+                        # Check for similar start (first 3 chars)
+                        elif query_word[:3] == text_word[:3] and len(query_word) > 3:
+                            score += 0.5
+                            break
+        
+        # 3. Individual keyword matches
         for keyword in search_params.get('keywords', []):
             if keyword.lower() in text:
-                score += 1.0
+                score += 1.2
         
-        # Priority keyword matches (weighted higher)
+        # 4. Priority keyword matches (weighted higher)
         for keyword in search_params.get('priority_keywords', []):
             if keyword.lower() in text:
-                score += 2.0
+                score += 2.5
         
-        # Domain match
+        # 5. Domain match bonus
         domain = search_params.get('domain', '').lower()
-        if domain and domain in text:
-            score += 1.5
+        if domain and domain != 'general' and domain in text:
+            score += 1.8
+        
+        # 6. Source-specific bonuses
+        if dataset.source == 'worldbank':
+            # World Bank bonus for economic/development queries
+            econ_terms = ['gdp', 'economic', 'development', 'poverty', 'income', 'growth']
+            for term in econ_terms:
+                if term in query_lower and term in text:
+                    score += 1.0
+                    break
+        
+        elif dataset.source == 'kaggle':
+            # Kaggle bonus for ML/data science queries
+            ml_terms = ['machine learning', 'prediction', 'classification', 'analysis', 'model']
+            for term in ml_terms:
+                if term in query_lower and term in text:
+                    score += 0.8
+                    break
+        
+        # 7. Title vs description weighting
+        title_lower = dataset.title.lower()
+        if any(word in title_lower for word in query_lower.split()):
+            score += 1.5  # Title matches are more important
         
         # Normalize to 0-10 scale
         return min(score, 10.0)
@@ -309,6 +432,18 @@ class DataCollectorAgent:
             if 'downloadCount' in result:
                 downloads = result.get('downloadCount', 0)  
                 score += min(downloads / 1000, 2.0)  # Up to 2 points for downloads
+        
+        elif source == 'worldbank':
+            # World Bank data is official and high quality
+            score += 2.5  # Higher than government data
+            
+            # Check for topics/categories
+            if result.get('topics') and len(result.get('topics', [])) > 0:
+                score += 1.0  # Well-categorized
+            
+            # Check for recent updates
+            if result.get('last_updated'):
+                score += 0.5  # Recently maintained
         
         return min(score, 10.0)
     
@@ -375,7 +510,10 @@ class DataCollectorAgent:
         try:
             # Create results directory
             results_dir = self.settings.cache_dir / "results"
-            results_dir.mkdir(exist_ok=True)
+            results_dir.mkdir(parents=True, exist_ok=True)
+            
+            if self.verbose:
+                self.console.print(f"[dim]📁 Creating results directory: {results_dir}[/dim]")
             
             # Generate filename from query
             import re
@@ -385,30 +523,62 @@ class DataCollectorAgent:
             
             filename_base = f"{safe_query}_{timestamp}"
             
-            # Save as CSV
+            if self.verbose:
+                self.console.print(f"[dim]💾 Saving results as: {filename_base}[/dim]")
+            
+            # Save as CSV (without metadata for readability)
             csv_path = results_dir / f"{filename_base}.csv"
-            df_export = df.drop('full_metadata', axis=1)  # Remove complex metadata for CSV
-            df_export.to_csv(csv_path, index=False)
+            df_export = df.drop('full_metadata', axis=1, errors='ignore')  # Remove complex metadata for CSV
+            df_export.to_csv(csv_path, index=False, encoding='utf-8')
+            
+            if self.verbose:
+                self.console.print(f"[dim]✅ CSV saved: {csv_path}[/dim]")
             
             # Save as JSON (with full metadata)
             json_path = results_dir / f"{filename_base}.json"
-            df.to_json(json_path, orient='records', indent=2)
+            # Convert DataFrame to dict for JSON serialization
+            json_data = []
+            for _, row in df.iterrows():
+                row_dict = row.to_dict()
+                # Handle any non-serializable data
+                for key, value in row_dict.items():
+                    if hasattr(value, 'to_dict'):
+                        row_dict[key] = value.to_dict()
+                    elif not isinstance(value, (str, int, float, bool, list, dict, type(None))):
+                        row_dict[key] = str(value)
+                json_data.append(row_dict)
+            
+            import json
+            with open(json_path, 'w', encoding='utf-8') as f:
+                json.dump(json_data, f, indent=2, ensure_ascii=False)
             
             if self.verbose:
-                self.console.print(f"[dim]💾 Results saved: {csv_path.name}[/dim]")
+                self.console.print(f"[dim]✅ JSON saved: {json_path}[/dim]")
+            
+            self.console.print(f"[green]💾 Results saved to: {results_dir}[/green]")
                 
         except Exception as e:
+            self.console.print(f"[red]❌ Failed to save results: {e}[/red]")
             if self.verbose:
-                self.console.print(f"[yellow]⚠️ Could not save results: {e}[/yellow]")
+                import traceback
+                self.console.print(f"[red]{traceback.format_exc()}[/red]")
     
-    def get_more_results(self, start_rank: int = 11, count: int = 10) -> pd.DataFrame:
+    def get_more_results(self, count: int = 10) -> pd.DataFrame:
         """Get more results from the last search"""
         
         if self.last_results_df is None:
             raise ValueError("No previous search results available")
         
-        end_rank = start_rank + count - 1
-        return self.last_results_df.iloc[start_rank-1:end_rank].copy()
+        start_pos = self.current_display_position
+        end_pos = start_pos + count
+        
+        more_data = self.last_results_df.iloc[start_pos:end_pos].copy()
+        
+        # Update position for next "more" request
+        if not more_data.empty:
+            self.current_display_position = end_pos
+            
+        return more_data
     
     def get_all_results(self) -> pd.DataFrame:
         """Get all results from the last search"""
@@ -452,16 +622,33 @@ class DataCollectorAgent:
                 
                 return preview
                 
-            elif source == 'kaggle':
+            elif dataset['source'] == 'kaggle':
                 # For Kaggle, try to get file list
-                dataset_id = dataset_url.split('/')[-1]
+                dataset_id = dataset['url'].split('/')[-1]
+                if '/' in dataset.get('id', ''):
+                    dataset_id = dataset['id']  # Use the full ref if available
+                
                 details = self.kaggle.get_dataset_details(dataset_id)
                 
                 return {
                     'source': 'kaggle',
                     'files': details.get('files', []),
                     'total_files': len(details.get('files', [])),
-                    'metadata': details.get('metadata', {})
+                    'metadata': details.get('metadata', {}),
+                    'file_count_from_metadata': dataset.get('fileCount', 0),  # Fallback from original metadata
+                    'download_count': dataset.get('downloadCount', 0),
+                    'vote_count': dataset.get('voteCount', 0)
+                }
+            elif source == 'worldbank':
+                # For World Bank, show indicator information
+                return {
+                    'source': 'worldbank',
+                    'indicator_id': dataset.get('id', 'N/A'),
+                    'topics': dataset.get('topics', []),
+                    'source_organization': dataset.get('source_organization', 'World Bank'),
+                    'last_updated': dataset.get('last_updated', 'N/A'),
+                    'data_url': dataset_url,
+                    'note': 'This is a World Bank development indicator. Access full time-series data via the URL.'
                 }
                 
         except Exception as e:

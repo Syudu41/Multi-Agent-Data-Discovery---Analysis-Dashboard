@@ -165,13 +165,15 @@ class KaggleConnector(BaseConnector):
             if self.verbose:
                 self.console.print(f"[green]✅ Found {len(datasets)} datasets on Kaggle[/green]")
             
-            # Convert to our format (limit to first 100 for performance)
+            # Convert to our format - Remove arbitrary limit, let user decide
             cleaned_datasets = []
-            max_datasets = min(len(datasets), 100)
             
-            for i, dataset in enumerate(datasets[:max_datasets]):
-                if self.verbose and i < 3:  # Debug first 3 datasets
-                    self.console.print(f"[dim]🔍 Processing dataset {i+1}: {getattr(dataset, 'title', 'No title')}[/dim]")
+            if self.verbose:
+                self.console.print(f"[dim]📦 Processing {len(datasets)} raw Kaggle datasets[/dim]")
+            
+            for i, dataset in enumerate(datasets):
+                if self.verbose and i < 5:  # Debug first 5 datasets
+                    self.console.print(f"[dim]🔍 Processing dataset {i+1}: {getattr(dataset, 'title', 'No title')[:50]}...[/dim]")
                 
                 cleaned = self._clean_dataset(dataset)
                 if cleaned:
@@ -180,7 +182,7 @@ class KaggleConnector(BaseConnector):
                     self.console.print(f"[yellow]⚠️ Failed to clean dataset {i+1}[/yellow]")
             
             if self.verbose:
-                self.console.print(f"[green]✅ Successfully processed {len(cleaned_datasets)} of {max_datasets} Kaggle datasets[/green]")
+                self.console.print(f"[green]✅ Successfully processed {len(cleaned_datasets)} of {len(datasets)} Kaggle datasets[/green]")
             
             return cleaned_datasets
             

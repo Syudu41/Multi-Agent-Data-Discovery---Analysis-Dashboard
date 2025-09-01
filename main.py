@@ -94,7 +94,11 @@ def main(max_results: int, verbose: bool, clear_cache: bool):
             df_results = agent.discover_datasets(query, max_results=max_results)
             
             if df_results.empty:
-                console.print("[red]No datasets found for your query. Try rephrasing or using different keywords.[/red]")
+                console.print("[yellow]📭 No relevant datasets found for your query.[/yellow]")
+                console.print("[dim]💡 Try these suggestions:[/dim]")
+                console.print("[dim]  • Use simpler keywords (e.g., 'education' instead of 'educational attainment')[/dim]")
+                console.print("[dim]  • Try different terms (e.g., 'climate' instead of 'global warming')[/dim]")
+                console.print("[dim]  • Use broader categories (e.g., 'health' instead of 'cardiovascular disease')[/dim]")
                 continue
                 
             # Display results in table format
@@ -148,28 +152,58 @@ def main(max_results: int, verbose: bool, clear_cache: bool):
                         all_results = agent.get_all_results()
                         if 1 <= rank <= len(all_results):
                             dataset = all_results.iloc[rank-1]
-                            preview = agent.preview_dataset(dataset['url'], dataset['source'])
+                            preview = agent.preview_dataset(
+                                dataset['url'], 
+                                dataset['source'], 
+                                dataset.get('full_metadata', {})
+                            )
                             
                             console.print(f"\n[bold cyan]Preview of: {dataset['title']}[/bold cyan]")
                             console.print(f"[green]Source:[/green] {dataset['source']}")
                             console.print(f"[green]URL:[/green] {dataset['url']}")
                             
                             if 'error' in preview:
-                                console.print(f"[yellow]{preview['error']}[/yellow]")
-                                console.print(f"[dim]{preview.get('note', '')}[/dim]")
+                                console.print(f"[yellow]⚠️ {preview['error']}[/yellow]")
+                                
+                                # Show fallback info if available
+                                if 'fallback_info' in preview:
+                                    console.print("[green]Available Info:[/green]")
+                                    fallback = preview['fallback_info']
+                                    for key, value in fallback.items():
+                                        console.print(f"   • {key.replace('_', ' ').title()}: {value}")
+                                
+                                if 'note' in preview:
+                                    console.print(f"[dim]{preview['note']}[/dim]")
+                            
                             elif dataset['source'] == 'data.gov':
                                 console.print(f"[green]Total Resources:[/green] {preview['total_resources']}")
-                                console.print(f"[green]Available Formats:[/green] {', '.join(preview['formats'])}")
+                                console.print(f"[green]Available Formats:[/green] {', '.join(preview['formats']) if preview['formats'] else 'N/A'}")
                                 if preview['resources']:
                                     console.print("\n[bold]Resources:[/bold]")
                                     for res in preview['resources'][:3]:  # Show first 3
                                         console.print(f"  • {res['name']} ({res['format']})")
+                            
                             elif dataset['source'] == 'kaggle':
-                                console.print(f"[green]Total Files:[/green] {preview['total_files']}")
-                                if preview['files']:
+                                console.print(f"[green]Total Files:[/green] {preview.get('total_files', 'N/A')}")
+                                if preview.get('file_count_fallback', 0) > 0:
+                                    console.print(f"[green]Metadata File Count:[/green] {preview['file_count_fallback']}")
+                                console.print(f"[green]Downloads:[/green] {preview.get('download_count', 'N/A')}")
+                                console.print(f"[green]Votes:[/green] {preview.get('vote_count', 'N/A')}")
+                                if preview.get('dataset_ref'):
+                                    console.print(f"[green]Dataset ID:[/green] {preview['dataset_ref']}")
+                                if preview.get('files'):
                                     console.print("\n[bold]Files:[/bold]")
                                     for file in preview['files'][:3]:  # Show first 3
                                         console.print(f"  • {file['name']} ({file.get('size', 'Unknown size')})")
+                            
+                            elif dataset['source'] == 'worldbank':
+                                console.print(f"[green]Indicator ID:[/green] {preview.get('indicator_id', 'N/A')}")
+                                console.print(f"[green]Source:[/green] {preview.get('source_organization', 'World Bank')}")
+                                console.print(f"[green]Last Updated:[/green] {preview.get('last_updated', 'N/A')}")
+                                if preview.get('topics'):
+                                    console.print(f"[green]Topics:[/green] {', '.join(preview['topics'][:3])}")
+                                if preview.get('note'):
+                                    console.print(f"[dim]{preview['note']}[/dim]")
                         else:
                             console.print(f"[red]Invalid rank. Please choose 1-{len(all_results)}[/red]")
                     except (ValueError, IndexError):

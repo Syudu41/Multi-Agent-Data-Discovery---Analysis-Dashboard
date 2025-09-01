@@ -40,11 +40,12 @@ def test_agent1():
         console.print("🤖 Initializing Agent 1...")
         agent = DataCollectorAgent(settings, verbose=True)
         
-        # Test queries
+        # Test queries - enhanced for triple source testing
         test_queries = [
-            "education spending by country",
-            "climate change temperature data",
-            "population demographics United States"
+            "education spending by country",  # Should hit all 3 sources
+            "gdp economic growth",            # Should be strong in World Bank  
+            "climate change temperature data", # Should hit data.gov + Kaggle
+            "covid vaccination rates"          # Should be in all sources
         ]
         
         for i, query in enumerate(test_queries, 1):
@@ -59,11 +60,36 @@ def test_agent1():
                     # Show results table
                     agent.display_results_table(df_results)
                     
-                    # Show source breakdown
+                    # Show enhanced source breakdown
                     source_counts = agent.get_all_results()['source'].value_counts()
-                    console.print(f"\n[bold]Source breakdown:[/bold]")
+                    console.print(f"\n[bold]Enhanced Multi-Source Breakdown:[/bold]")
+                    total_datasets = len(agent.get_all_results())
                     for source, count in source_counts.items():
-                        console.print(f"   • {source}: {count} datasets")
+                        percentage = (count / total_datasets * 100) if total_datasets > 0 else 0
+                        console.print(f"   • {source}: {count} datasets ({percentage:.1f}%)")
+                    
+                    # Test preview for each source type
+                    console.print(f"\n[bold]Testing preview for each source:[/bold]")
+                    for source in source_counts.index:
+                        source_data = agent.get_all_results()[agent.get_all_results()['source'] == source]
+                        if not source_data.empty:
+                            first_dataset = source_data.iloc[0]
+                            console.print(f"\n[cyan]{source} preview:[/cyan]")
+                            try:
+                                preview = agent.preview_dataset(
+                                    first_dataset['url'], 
+                                    first_dataset['source'],
+                                    first_dataset.get('full_metadata', {})
+                                )
+                                console.print(f"  Preview keys: {list(preview.keys())}")
+                                if 'error' in preview:
+                                    console.print(f"  Error: {preview['error']}")
+                                else:
+                                    console.print(f"  Status: Preview successful for {source}")
+                            except Exception as e:
+                                console.print(f"  Preview failed: {e}")
+                        
+                    break  # Stop after first successful test
                         
                 else:
                     console.print("[yellow]⚠️ No datasets found[/yellow]")
