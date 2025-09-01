@@ -1,0 +1,46 @@
+# =============================================================================
+# PersonalDataAI Requirements - Agent 1 (Data Discovery Specialist)
+# =============================================================================
+
+# Core Agent Framework
+crewai
+langchain
+langchain-community
+
+# LLM Integration
+ollama
+
+# Environment & Configuration
+python-dotenv
+pydantic
+
+# API & HTTP
+requests
+urllib3
+
+# Data Processing (basic for Agent 1)
+pandas
+numpy
+
+# Caching & Utilities
+diskcache
+click
+rich
+
+# JSON/YAML Handling
+pyyaml
+jsonschema
+
+# Date/Time Utilities
+python-dateutil
+
+# Logging
+loguru
+
+# Optional: Kaggle API
+kaggle
+
+# Development/Testing (optional)
+pytest
+black
+isort
