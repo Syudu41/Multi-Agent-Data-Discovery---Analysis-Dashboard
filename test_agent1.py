@@ -51,16 +51,20 @@ def test_agent1():
             console.print(f"\n[bold cyan]Test {i}/3: '{query}'[/bold cyan]")
             
             try:
-                datasets = agent.discover_datasets(query, max_results=5)
+                df_results = agent.discover_datasets(query, max_results=5)
                 
-                if datasets:
-                    console.print(f"[green]✅ Found {len(datasets)} datasets![/green]")
+                if not df_results.empty:
+                    console.print(f"[green]✅ Found {len(agent.get_all_results())} total datasets! Showing top {len(df_results)}[/green]")
                     
-                    # Show top result
-                    top_dataset = datasets[0]
-                    console.print(f"[bold]Top result:[/bold] {top_dataset['title']}")
-                    console.print(f"[green]Source:[/green] {top_dataset['source']}")
-                    console.print(f"[green]Score:[/green] {top_dataset['overall_score']}")
+                    # Show results table
+                    agent.display_results_table(df_results)
+                    
+                    # Show source breakdown
+                    source_counts = agent.get_all_results()['source'].value_counts()
+                    console.print(f"\n[bold]Source breakdown:[/bold]")
+                    for source, count in source_counts.items():
+                        console.print(f"   • {source}: {count} datasets")
+                        
                 else:
                     console.print("[yellow]⚠️ No datasets found[/yellow]")
                     

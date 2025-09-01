@@ -77,25 +77,85 @@ def main(max_results: int, verbose: bool):
             console.print("\n[yellow]🔍 Agent 1: Data Discovery Specialist - Starting...[/yellow]")
             
             # Execute data discovery
-            datasets = agent.discover_datasets(query, max_results=max_results)
+            df_results = agent.discover_datasets(query, max_results=max_results)
             
-            if not datasets:
+            if df_results.empty:
                 console.print("[red]No datasets found for your query. Try rephrasing or using different keywords.[/red]")
                 continue
                 
-            # Display results
-            console.print(f"\n[green]✅ Found {len(datasets)} relevant datasets![/green]")
-            
-            # Show dataset options
+            # Display results in table format
+            console.print(f"\n[green]✅ Found {len(agent.get_all_results())} total datasets! Showing top {len(df_results)}[/green]")
             console.print("\n[bold cyan]📊 Available Datasets:[/bold cyan]")
-            for i, dataset in enumerate(datasets, 1):
-                console.print(f"[dim]{i}.[/dim] [bold]{dataset['title']}[/bold]")
-                console.print(f"   [green]Source:[/green] {dataset['source']}")
-                console.print(f"   [green]Score:[/green] {dataset['relevance_score']:.2f}/10")
-                if dataset.get('description'):
-                    desc = dataset['description'][:100] + "..." if len(dataset['description']) > 100 else dataset['description']
-                    console.print(f"   [dim]{desc}[/dim]")
-                console.print()
+            
+            agent.display_results_table(df_results)
+            
+            # Options for user
+            console.print("\n[bold yellow]Options:[/bold yellow]")
+            console.print("• [dim]Type 'more' to see more results[/dim]")
+            console.print("• [dim]Type 'all' to see all results[/dim]")  
+            console.print("• [dim]Type 'preview <rank>' to preview a dataset[/dim]")
+            console.print("• [dim]Press Enter for a new search[/dim]")
+            
+            while True:
+                user_input = console.input("\n[yellow]>>[/yellow] ").strip().lower()
+                
+                if not user_input:
+                    break  # New search
+                elif user_input == 'more':
+                    try:
+                        more_results = agent.get_more_results(start_rank=max_results+1, count=10)
+                        if not more_results.empty:
+                            console.print(f"\n[green]Next {len(more_results)} results:[/green]")
+                            agent.display_results_table(more_results)
+                        else:
+                            console.print("[yellow]No more results available[/yellow]")
+                    except Exception as e:
+                        console.print(f"[red]Error: {e}[/red]")
+                        
+                elif user_input == 'all':
+                    try:
+                        all_results = agent.get_all_results()
+                        console.print(f"\n[green]All {len(all_results)} results:[/green]")
+                        agent.display_results_table(all_results, max_description_length=60)  # Shorter descriptions for full list
+                    except Exception as e:
+                        console.print(f"[red]Error: {e}[/red]")
+                        
+                elif user_input.startswith('preview '):
+                    try:
+                        rank = int(user_input.split()[1])
+                        all_results = agent.get_all_results()
+                        if 1 <= rank <= len(all_results):
+                            dataset = all_results.iloc[rank-1]
+                            preview = agent.preview_dataset(dataset['url'], dataset['source'])
+                            
+                            console.print(f"\n[bold cyan]Preview of: {dataset['title']}[/bold cyan]")
+                            console.print(f"[green]Source:[/green] {dataset['source']}")
+                            console.print(f"[green]URL:[/green] {dataset['url']}")
+                            
+                            if 'error' in preview:
+                                console.print(f"[yellow]{preview['error']}[/yellow]")
+                                console.print(f"[dim]{preview.get('note', '')}[/dim]")
+                            elif dataset['source'] == 'data.gov':
+                                console.print(f"[green]Total Resources:[/green] {preview['total_resources']}")
+                                console.print(f"[green]Available Formats:[/green] {', '.join(preview['formats'])}")
+                                if preview['resources']:
+                                    console.print("\n[bold]Resources:[/bold]")
+                                    for res in preview['resources'][:3]:  # Show first 3
+                                        console.print(f"  • {res['name']} ({res['format']})")
+                            elif dataset['source'] == 'kaggle':
+                                console.print(f"[green]Total Files:[/green] {preview['total_files']}")
+                                if preview['files']:
+                                    console.print("\n[bold]Files:[/bold]")
+                                    for file in preview['files'][:3]:  # Show first 3
+                                        console.print(f"  • {file['name']} ({file.get('size', 'Unknown size')})")
+                        else:
+                            console.print(f"[red]Invalid rank. Please choose 1-{len(all_results)}[/red]")
+                    except (ValueError, IndexError):
+                        console.print("[red]Invalid command. Use: preview <rank_number>[/red]")
+                    except Exception as e:
+                        console.print(f"[red]Error: {e}[/red]")
+                else:
+                    console.print("[yellow]Unknown command. Try 'more', 'all', 'preview <rank>', or press Enter for new search.[/yellow]")
             
             # Ask if user wants to continue
             console.print(Panel.fit(

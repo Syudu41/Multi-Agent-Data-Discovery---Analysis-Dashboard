@@ -14,6 +14,9 @@ from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
+from rich.table import Table
+import pandas as pd
+from pathlib import Path
 
 from tools.data_sources.data_gov_connector import DataGovConnector
 from tools.data_sources.kaggle_connector import KaggleConnector
@@ -60,17 +63,21 @@ class DataCollectorAgent:
             cache_dir=settings.cache_dir,
             verbose=verbose
         )
+        
+        # Storage for results
+        self.last_results_df = None
+        self.last_query = None
     
-    def discover_datasets(self, query: str, max_results: int = 10) -> List[Dict[str, Any]]:
+    def discover_datasets(self, query: str, max_results: int = 10) -> pd.DataFrame:
         """
         Main method: Discover relevant datasets for a user query
         
         Args:
             query: Natural language query from user
-            max_results: Maximum number of datasets to return
+            max_results: Maximum number of datasets to return for display
             
         Returns:
-            List of ranked datasets with metadata
+            DataFrame of ranked datasets with metadata
         """
         
         if self.verbose:
@@ -106,12 +113,35 @@ class DataCollectorAgent:
             progress.update(task, completed=True)
         
         # Return top results
-        top_results = ranked_datasets[:max_results]
-        
         if self.verbose:
-            self.console.print(f"[dim]✅ Found {len(ranked_datasets)} total datasets, returning top {len(top_results)}[/dim]")
+            self.console.print(f"[dim]✅ Found {len(ranked_datasets)} total datasets[/dim]")
         
-        return [self._dataset_to_dict(dataset) for dataset in top_results]
+        # Convert to DataFrame
+        df_data = []
+        for i, dataset in enumerate(ranked_datasets):
+            df_data.append({
+                'rank': i + 1,
+                'title': dataset.title,
+                'description': dataset.description[:200] + "..." if len(dataset.description) > 200 else dataset.description,
+                'source': dataset.source,
+                'url': dataset.url,
+                'relevance_score': round(dataset.relevance_score, 2),
+                'quality_score': round(dataset.quality_score, 2),
+                'recency_score': round(dataset.recency_score, 2),
+                'overall_score': round(dataset.overall_score, 2),
+                'full_metadata': dataset.metadata
+            })
+        
+        df = pd.DataFrame(df_data)
+        
+        # Save full results to files
+        self._save_results(df, query)
+        
+        # Store in instance for later access
+        self.last_results_df = df
+        self.last_query = query
+        
+        return df.head(max_results)  # Return top N for display
     
     def _parse_query_with_llm(self, query: str) -> Dict[str, Any]:
         """Use LLM to extract search parameters from natural language query"""
@@ -338,3 +368,129 @@ class DataCollectorAgent:
             'overall_score': round(dataset.overall_score, 2),
             'metadata': dataset.metadata
         }
+    
+    def _save_results(self, df: pd.DataFrame, query: str):
+        """Save results to files for later access"""
+        
+        try:
+            # Create results directory
+            results_dir = self.settings.cache_dir / "results"
+            results_dir.mkdir(exist_ok=True)
+            
+            # Generate filename from query
+            import re
+            safe_query = re.sub(r'[^\w\s-]', '', query).strip()
+            safe_query = re.sub(r'[-\s]+', '_', safe_query)[:50]
+            timestamp = int(time.time())
+            
+            filename_base = f"{safe_query}_{timestamp}"
+            
+            # Save as CSV
+            csv_path = results_dir / f"{filename_base}.csv"
+            df_export = df.drop('full_metadata', axis=1)  # Remove complex metadata for CSV
+            df_export.to_csv(csv_path, index=False)
+            
+            # Save as JSON (with full metadata)
+            json_path = results_dir / f"{filename_base}.json"
+            df.to_json(json_path, orient='records', indent=2)
+            
+            if self.verbose:
+                self.console.print(f"[dim]💾 Results saved: {csv_path.name}[/dim]")
+                
+        except Exception as e:
+            if self.verbose:
+                self.console.print(f"[yellow]⚠️ Could not save results: {e}[/yellow]")
+    
+    def get_more_results(self, start_rank: int = 11, count: int = 10) -> pd.DataFrame:
+        """Get more results from the last search"""
+        
+        if self.last_results_df is None:
+            raise ValueError("No previous search results available")
+        
+        end_rank = start_rank + count - 1
+        return self.last_results_df.iloc[start_rank-1:end_rank].copy()
+    
+    def get_all_results(self) -> pd.DataFrame:
+        """Get all results from the last search"""
+        
+        if self.last_results_df is None:
+            raise ValueError("No previous search results available")
+        
+        return self.last_results_df.copy()
+    
+    def preview_dataset(self, dataset_url: str, source: str) -> Dict[str, Any]:
+        """
+        Get basic preview of dataset contents and structure
+        Note: This is basic preview - full data processing is Agent 2's job
+        """
+        
+        try:
+            if source == 'data.gov':
+                # For data.gov, try to get dataset details
+                dataset_id = dataset_url.split('/')[-1]
+                details = self.data_gov.get_dataset_details(dataset_id)
+                
+                preview = {
+                    'source': 'data.gov',
+                    'resources': [],
+                    'formats': set(),
+                    'total_resources': 0
+                }
+                
+                for resource in details.get('resources', []):
+                    if resource.get('url') and resource.get('format'):
+                        preview['resources'].append({
+                            'name': resource.get('name', 'Unknown'),
+                            'format': resource.get('format', 'Unknown'),
+                            'size': resource.get('size', 'Unknown'),
+                            'url': resource.get('url')
+                        })
+                        preview['formats'].add(resource['format'].upper())
+                
+                preview['total_resources'] = len(preview['resources'])
+                preview['formats'] = list(preview['formats'])
+                
+                return preview
+                
+            elif source == 'kaggle':
+                # For Kaggle, try to get file list
+                dataset_id = dataset_url.split('/')[-1]
+                details = self.kaggle.get_dataset_details(dataset_id)
+                
+                return {
+                    'source': 'kaggle',
+                    'files': details.get('files', []),
+                    'total_files': len(details.get('files', [])),
+                    'metadata': details.get('metadata', {})
+                }
+                
+        except Exception as e:
+            return {
+                'error': f"Could not preview dataset: {e}",
+                'note': "Full data access and column analysis will be available in Agent 2"
+            }
+    
+    def display_results_table(self, df: pd.DataFrame, max_description_length: int = 80):
+        """Display results in a nice table format"""
+        
+        table = Table(show_header=True, header_style="bold cyan")
+        table.add_column("Rank", style="dim", width=4)
+        table.add_column("Title", style="bold", max_width=30)
+        table.add_column("Source", style="green", width=10)
+        table.add_column("Score", style="yellow", width=6)
+        table.add_column("Description", style="dim", max_width=max_description_length)
+        
+        for _, row in df.iterrows():
+            desc = row['description']
+            if len(desc) > max_description_length:
+                desc = desc[:max_description_length-3] + "..."
+            
+            table.add_row(
+                str(row['rank']),
+                row['title'],
+                row['source'],
+                str(row['overall_score']),
+                desc
+            )
+        
+        self.console.print(table)

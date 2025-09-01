@@ -68,7 +68,7 @@ class DataGovConnector(BaseConnector):
         # CKAN API parameters
         params = {
             'q': query,
-            'rows': 50,  # Maximum results per request
+            'rows': 100,  # Increased to 100 results per request
             'sort': 'score desc, metadata_modified desc',  # Relevance + recency
             'facet': 'false',  # Don't need facet counts
         }

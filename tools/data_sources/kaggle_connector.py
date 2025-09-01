@@ -92,29 +92,68 @@ class KaggleConnector(BaseConnector):
             all_keywords = list(set(priority_keywords + keywords))
             search_query = ' '.join(all_keywords[:5]) if all_keywords else 'data'  # Limit keywords
             
-            # Search parameters
+            # Search parameters - Kaggle API is simpler than we thought
             search_kwargs = {
                 'search': search_query,
-                'sort_by': 'hotness',  # Most popular/relevant first
-                'page': 1,
-                'page_size': 50  # Maximum per request
+                'sort_by': 'hotness'  # Most popular/relevant first
             }
             
             if self.verbose:
-                self.console.print(f"[dim]📡 Kaggle API search: '{search_query}'[/dim]")
+                self.console.print(f"[dim]📡 Kaggle API search: '{search_query}' with {len(all_keywords)} keywords[/dim]")
             
             # Make the API call
             datasets = self.kaggle_api.dataset_list(**search_kwargs)
             
             if self.verbose:
+                self.console.print(f"[green]✅ Kaggle API returned {len(datasets)} raw datasets[/green]")
+                
+            # If we got no results, try simpler searches
+            if len(datasets) == 0 and all_keywords:
+                if self.verbose:
+                    self.console.print("[yellow]⚠️ No datasets returned from Kaggle - trying broader search[/yellow]")
+                    
+                # Try with just the first keyword
+                broader_search = all_keywords[0]
+                search_kwargs['search'] = broader_search
+                if self.verbose:
+                    self.console.print(f"[dim]🔄 Retrying with broader search: '{broader_search}'[/dim]")
+                datasets = self.kaggle_api.dataset_list(**search_kwargs)
+                
+                if self.verbose:
+                    self.console.print(f"[green]✅ Broader search returned {len(datasets)} datasets[/green]")
+                    
+                # If still no results, try without search term (get popular datasets)
+                if len(datasets) == 0:
+                    if self.verbose:
+                        self.console.print("[yellow]⚠️ Still no results - getting popular datasets[/yellow]")
+                    try:
+                        datasets = self.kaggle_api.dataset_list(sort_by='hotness')[:50]  # Get top 50 popular
+                        if self.verbose:
+                            self.console.print(f"[green]✅ Popular datasets fallback returned {len(datasets)} datasets[/green]")
+                    except Exception as e:
+                        if self.verbose:
+                            self.console.print(f"[red]❌ Fallback failed: {e}[/red]")
+                        datasets = []
+            
+            if self.verbose:
                 self.console.print(f"[green]✅ Found {len(datasets)} datasets on Kaggle[/green]")
             
-            # Convert to our format
+            # Convert to our format (limit to first 100 for performance)
             cleaned_datasets = []
-            for dataset in datasets:
+            max_datasets = min(len(datasets), 100)
+            
+            for i, dataset in enumerate(datasets[:max_datasets]):
+                if self.verbose and i < 3:  # Debug first 3 datasets
+                    self.console.print(f"[dim]🔍 Processing dataset {i+1}: {getattr(dataset, 'title', 'No title')}[/dim]")
+                
                 cleaned = self._clean_dataset(dataset)
                 if cleaned:
                     cleaned_datasets.append(cleaned)
+                elif self.verbose:
+                    self.console.print(f"[yellow]⚠️ Failed to clean dataset {i+1}[/yellow]")
+            
+            if self.verbose:
+                self.console.print(f"[green]✅ Successfully processed {len(cleaned_datasets)} of {max_datasets} Kaggle datasets[/green]")
             
             return cleaned_datasets
             
@@ -128,9 +167,12 @@ class KaggleConnector(BaseConnector):
         
         try:
             # Kaggle dataset objects have specific attributes
-            dataset_ref = raw_dataset.ref
-            title = raw_dataset.title or 'Untitled Dataset'
+            dataset_ref = getattr(raw_dataset, 'ref', 'unknown/unknown')
+            title = getattr(raw_dataset, 'title', None) or 'Untitled Dataset'
             subtitle = getattr(raw_dataset, 'subtitle', '')
+            
+            if self.verbose:
+                self.console.print(f"[dim]   📝 Dataset ref: {dataset_ref}, title: {title[:50]}...[/dim]")
             
             # Build URL
             dataset_url = f"https://www.kaggle.com/datasets/{dataset_ref}"
@@ -182,11 +224,15 @@ class KaggleConnector(BaseConnector):
                 }
             }
             
+            if self.verbose:
+                self.console.print(f"[dim]   ✅ Successfully cleaned dataset: {title[:30]}...[/dim]")
+            
             return cleaned
             
         except Exception as e:
             if self.verbose:
                 self.console.print(f"[yellow]⚠️ Error cleaning Kaggle dataset: {e}[/yellow]")
+                self.console.print(f"[dim]   Dataset attributes: {dir(raw_dataset)}[/dim]")
             return None
     
     def get_dataset_details(self, dataset_id: str) -> Dict[str, Any]:
@@ -237,9 +283,9 @@ class KaggleConnector(BaseConnector):
             return False
         
         try:
-            # Try to get user info as a simple API test
-            self.kaggle_api.competitions_list(page=1, page_size=1)
-            return True
+            # Try to get a small list of datasets as a simple API test
+            datasets = self.kaggle_api.dataset_list()
+            return len(datasets) >= 0  # Even 0 results means the API is working
             
         except Exception:
             return False
