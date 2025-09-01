@@ -42,74 +42,190 @@ class DataGovConnector(BaseConnector):
         return self._make_request_with_cache("search", search_params, _make_request)
     
     def _search_datasets(self, search_params: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Internal method to search datasets"""
+        """Internal method to search datasets using multiple endpoints"""
+        
+        all_results = []
         
         # Build search query from parameters
         query_parts = []
         
-        # Add keywords
+        # Add keywords with priority handling
         keywords = search_params.get('keywords', [])
         priority_keywords = search_params.get('priority_keywords', [])
+        preserved_phrases = search_params.get('preserved_phrases', [])
         
-        # Combine and prioritize keywords
-        all_keywords = list(set(priority_keywords + keywords))
-        if all_keywords:
-            # Use OR for broader results
-            query_parts.append(' OR '.join(all_keywords))
+        # Combine all query elements
+        all_query_terms = preserved_phrases + priority_keywords + keywords[:10]  # Limit for performance
+        unique_terms = list(dict.fromkeys(all_query_terms))  # Remove duplicates, preserve order
         
-        # Add domain-specific terms
-        domain = search_params.get('domain', '')
-        if domain and domain != 'general':
-            query_parts.append(domain)
+        if unique_terms:
+            # For data.gov, use top terms for focused search
+            query = ' '.join(unique_terms[:5])  # Use top 5 terms
+        else:
+            query = 'data'
         
-        # Combine query parts
-        query = ' '.join(query_parts) if query_parts else 'data'
+        if self.verbose:
+            self.console.print(f"[dim]🔍 Data.gov multi-endpoint search with: '{query}'[/dim]")
         
-        # CKAN API parameters
+        # Endpoint 1: Package search (main datasets)
+        package_results = self._search_packages(query, search_params)
+        all_results.extend(package_results)
+        
+        # Endpoint 2: Organization-based search (for domain-specific queries)
+        if search_params.get('domain') != 'general':
+            org_results = self._search_by_organization(search_params)
+            all_results.extend(org_results)
+        
+        # Endpoint 3: Group/topic search (for categorized content)
+        group_results = self._search_by_groups(search_params)
+        all_results.extend(group_results)
+        
+        # Deduplicate results by ID
+        seen_ids = set()
+        deduplicated_results = []
+        for result in all_results:
+            result_id = result.get('id', '')
+            if result_id and result_id not in seen_ids:
+                seen_ids.add(result_id)
+                deduplicated_results.append(result)
+        
+        if self.verbose:
+            self.console.print(f"[green]✅ Data.gov multi-endpoint: {len(all_results)} raw, {len(deduplicated_results)} deduplicated[/green]")
+        
+        return deduplicated_results
+    
+    def _search_packages(self, query: str, search_params: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Search main package endpoint"""
+        
         params = {
             'q': query,
-            'rows': 100,  # Increased to 100 results per request
-            'sort': 'score desc, metadata_modified desc',  # Relevance + recency
-            'facet': 'false',  # Don't need facet counts
+            'rows': 150,  # Increased from 100
+            'sort': 'score desc, metadata_modified desc',
+            'facet': 'false',
         }
+        
+        # Add geographic filters if specified
+        geo_scope = search_params.get('geographic_scope', '')
+        if geo_scope == 'national':
+            params['fq'] = 'organization_type:federal'
+        elif geo_scope == 'local':
+            params['fq'] = 'organization_type:(state OR local)'
         
         try:
             url = f"{self.api_base}/action/package_search"
-            
-            if self.verbose:
-                self.console.print(f"[dim]📡 GET {url}?q={query[:50]}...[/dim]")
-            
-            response = self.session.get(url, params=params, timeout=10)
+            response = self.session.get(url, params=params, timeout=15)
             response.raise_for_status()
             
             data = response.json()
+            if data.get('success'):
+                datasets = data.get('result', {}).get('results', [])
+                return [self._clean_dataset(dataset) for dataset in datasets if self._clean_dataset(dataset)]
             
-            if not data.get('success'):
-                raise Exception(f"API returned success=false: {data.get('error', 'Unknown error')}")
-            
-            datasets = data.get('result', {}).get('results', [])
-            
-            if self.verbose:
-                self.console.print(f"[green]✅ Found {len(datasets)} datasets on data.gov[/green]")
-            
-            # Clean and enhance results
-            cleaned_datasets = []
-            for dataset in datasets:
-                cleaned = self._clean_dataset(dataset)
-                if cleaned:
-                    cleaned_datasets.append(cleaned)
-            
-            return cleaned_datasets
-            
-        except requests.exceptions.RequestException as e:
-            if self.verbose:
-                self.console.print(f"[red]❌ Data.gov API error: {e}[/red]")
-            return []
-        
         except Exception as e:
             if self.verbose:
-                self.console.print(f"[red]❌ Data.gov processing error: {e}[/red]")
+                self.console.print(f"[yellow]⚠️ Package search error: {e}[/yellow]")
+        
+        return []
+    
+    def _search_by_organization(self, search_params: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Search by relevant organizations for domain-specific queries"""
+        
+        # Map domains to relevant organizations
+        domain_orgs = {
+            'education': ['department-of-education', 'national-center-for-education-statistics'],
+            'health': ['centers-for-disease-control-and-prevention', 'national-institutes-of-health'],
+            'economy': ['bureau-of-economic-analysis', 'bureau-of-labor-statistics', 'census-bureau'],
+            'climate': ['national-oceanic-and-atmospheric-administration', 'environmental-protection-agency'],
+            'technology': ['national-institute-of-standards-and-technology', 'national-science-foundation']
+        }
+        
+        domain = search_params.get('domain', '')
+        relevant_orgs = domain_orgs.get(domain, [])
+        
+        if not relevant_orgs:
             return []
+        
+        org_results = []
+        for org_name in relevant_orgs[:2]:  # Limit to 2 orgs for performance
+            try:
+                params = {
+                    'q': '*:*',  # All datasets from this org
+                    'fq': f'organization:{org_name}',
+                    'rows': 25,  # Fewer per org
+                    'sort': 'metadata_modified desc'
+                }
+                
+                url = f"{self.api_base}/action/package_search"
+                response = self.session.get(url, params=params, timeout=10)
+                response.raise_for_status()
+                
+                data = response.json()
+                if data.get('success'):
+                    datasets = data.get('result', {}).get('results', [])
+                    for dataset in datasets:
+                        cleaned = self._clean_dataset(dataset)
+                        if cleaned:
+                            org_results.append(cleaned)
+                
+                if self.verbose:
+                    self.console.print(f"[dim]📊 {org_name}: {len(datasets)} datasets[/dim]")
+                            
+            except Exception as e:
+                if self.verbose:
+                    self.console.print(f"[yellow]⚠️ Org search error for {org_name}: {e}[/yellow]")
+                continue
+        
+        return org_results
+    
+    def _search_by_groups(self, search_params: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Search by topic groups for better categorization"""
+        
+        # Map domains to data.gov groups/topics
+        domain_groups = {
+            'education': ['education'],
+            'health': ['health', 'safety'],
+            'economy': ['economy', 'finance', 'business'],
+            'climate': ['environment', 'energy'],
+            'technology': ['science-and-research', 'information-and-communications']
+        }
+        
+        domain = search_params.get('domain', '')
+        relevant_groups = domain_groups.get(domain, [])
+        
+        if not relevant_groups:
+            return []
+        
+        group_results = []
+        for group_name in relevant_groups[:2]:  # Limit for performance
+            try:
+                params = {
+                    'q': '*:*',
+                    'fq': f'groups:{group_name}',
+                    'rows': 20,
+                    'sort': 'metadata_modified desc'
+                }
+                
+                url = f"{self.api_base}/action/package_search"
+                response = self.session.get(url, params=params, timeout=10)
+                response.raise_for_status()
+                
+                data = response.json()
+                if data.get('success'):
+                    datasets = data.get('result', {}).get('results', [])
+                    for dataset in datasets:
+                        cleaned = self._clean_dataset(dataset)
+                        if cleaned:
+                            group_results.append(cleaned)
+                
+                if self.verbose:
+                    self.console.print(f"[dim]🏷️ Group {group_name}: {len(datasets)} datasets[/dim]")
+                            
+            except Exception as e:
+                if self.verbose:
+                    self.console.print(f"[yellow]⚠️ Group search error for {group_name}: {e}[/yellow]")
+                continue
+        
+        return group_results
     
     def _clean_dataset(self, raw_dataset: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Clean and standardize dataset information"""
